@@ -1,0 +1,64 @@
+--' The alnqc test suite, against a Python oracle
+--'
+--' On synthetic placements with known coverage.
+module alnqc.test (test)
+
+import root
+import root-py
+import bio
+import alnqc
+import unittest
+
+record Py => FragHits = "dict"
+record Py => TxHit = "dict"
+record Py => TxGene = "dict"
+record Py => AlnQcRefs = "dict"
+record Py => AlnQc = "dict"
+record Py => TxPoints = "dict"
+
+source Py from "alnqc-test.py"
+  ( "ref_names" as refNames
+  , "ref_lengths" as refLengths
+  , "tx_genes" as txGeneList
+  , "placements" as placements
+  , "write_pairs" as writePairs
+  , "check" as checkQc
+  , "check_reports" as checkReports
+  )
+
+refNames :: [Str]
+refLengths :: [Int]
+txGeneList :: [TxGene]
+placements :: [FragHits]
+writePairs :: <IO> Str
+checkQc :: AlnQc -> AlnQcRefs -> [Int] -> [(Int, Real)] -> Str
+checkReports :: Str -> Str -> Str -> Str -> Str -> Str
+
+refs :: AlnQcRefs
+refs = alnQcRefs refNames refLengths txGeneList
+
+halves :: [a] -> ([a], [a])
+halves xs = (.[0:20] xs, .[20:] xs)
+
+testQc :: Results -> <IO> Results
+testQc s0 = do
+  p <- writePairs
+  pairs <- collectSource (readFastqPairs (p <> "_1.fq") (p <> "_2.fq"))
+  let q = alnQcPairs refs pairs placements
+  let a = alnQcPairs refs (.0 (halves pairs)) (.0 (halves placements))
+  let b = alnQcPairs refs (.1 (halves pairs)) (.1 (halves placements))
+  let m = mergeAlnQc a b
+  let e = mergeAlnQc (alnQcPairs refs [] []) q
+  ( testEqual "the summary matches the oracle" (checkQc q refs (geneBodyCoverage q) (tinValues 10 q)) ""
+  . testEqual "merged halves match the oracle" (checkQc m refs (geneBodyCoverage m) (tinValues 10 m)) ""
+  . testEqual "the empty summary is an identity" (checkQc e refs (geneBodyCoverage e) (tinValues 10 e)) ""
+  . testEqual "reports"
+      ( checkReports (geneBodyCoverageText "S" q) (tinSummaryText "S" q) (biotypeCountsText refs q)
+          (rrnaPercentText "S" refs q) (readOriginText "S" q)
+      )
+      ""
+  . testEqual "decoys have no gene" (.[3] (.genes refs)) (-1)
+  ) s0
+
+test :: <IO> Bool
+test = suiteE (groupE "Alignment QC" testQc)

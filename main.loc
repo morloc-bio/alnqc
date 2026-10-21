@@ -1,0 +1,163 @@
+--' Alignment QC over a mapper's placements of fragments on transcripts
+--'
+--' Summarize transcriptome alignment:
+--'
+--' * read origin: unmapped, genomic, on single transcript/gene, on several genes
+--' * biotype counts (featureCounts on gene_biotype): each mapped fragment
+--'   split over the biotypes of its placements' genes by placement weight;
+--' * gene body coverage (RSeQC geneBody_coverage) and transcript integrity
+--'   (RSeQC tin): coverage at 100 evenly spaced positions of each
+--'   transcript of at least 100 bases, 5' to 3', by fragments whose
+--'   placements all lie in one gene; a fragment covers the bases of its
+--'   reads (not the insert between them) on every transcript it is placed
+--'   on, as a read on a shared exon covers every isoform in RSeQC.
+module alnqc
+  ( AlnQcRefs
+  , TxPoints
+  , AlnQc
+  , alnQcRefs
+  , alnQcPairs
+  , alnQcReads
+  , mergeAlnQc
+  , geneBodyCoverage
+  , tinValues
+  , geneBodyCoverageText
+  , tinSummaryText
+  , biotypeCountsText
+  , rrnaPercentText
+  , readOriginText
+  )
+
+import bio
+
+--' What QC needs about the references a mapper's hits number
+--'
+--' Each list is in hit order.
+record AlnQcRefs where
+  --' Length of each reference
+  lengths :: [Int]
+  --' Gene of each reference (index into `geneIds`), -1 for none
+  genes :: [Int]
+  --' Gene ids
+  geneIds :: [Str]
+  --' Biotype of each reference, -1 for none
+  --'
+  --' An index into `biotypeNames`.
+  biotypes :: [Int]
+  --' Biotype names
+  biotypeNames :: [Str]
+
+--' A mapper's references annotated from transcript genes
+--'
+--' A reference no transcript names (a decoy) has no gene or biotype; a
+--' transcript without a biotype gets "unknown".
+alnQcRefs ::
+  --' Name of each reference, in hit order
+  [Str] ->
+  --' Length of each reference, in hit order
+  [Int] ->
+  [TxGene] ->
+  AlnQcRefs
+
+--' A transcript's coverage at its 100 sample positions
+record TxPoints where
+  --' The transcript, as a reference index
+  tx :: Int
+  --' Fragments placed on it that were counted
+  fragments :: Int
+  --' Coverage at each sample position, 5' to 3'
+  points :: [Int]
+
+--' Alignment QC of a set of fragments
+record AlnQc where
+  --' Fragments seen
+  fragments :: Int
+  --' Fragments with no placement
+  unmapped :: Int
+  --' Unmapped fragments that matched a decoy
+  decoy :: Int
+  --' Fragments whose placements all lie on one transcript
+  oneTx :: Int
+  --' Fragments on several transcripts of one gene
+  oneGene :: Int
+  --' Fragments on several genes
+  multiGene :: Int
+  --' Fractional fragments per biotype (index into `biotypeNames`)
+  biotypeCounts :: [Real]
+  --' Coverage of each covered transcript, ascending by `tx`
+  txPoints :: [TxPoints]
+
+--' The QC of a batch of pairs and their placements
+--'
+--' One `FragHits` per pair, in order.
+alnQcPairs :: AlnQcRefs -> [ReadPair] -> [FragHits] -> AlnQc
+
+--' The QC of a batch of single-end reads and their placements
+alnQcReads :: AlnQcRefs -> [FastqEntry] -> [FragHits] -> AlnQc
+
+--' Merge two alignment QC summaries
+mergeAlnQc :: AlnQc -> AlnQc -> AlnQc
+
+--' Gene body coverage at each percentile 1..100
+--'
+--' The summed coverage over every covered transcript.
+geneBodyCoverage :: AlnQc -> [Int]
+
+--' RSeQC's TIN of each transcript with enough fragments
+--'
+--' 100 * exp(H) / 100, H the entropy of its coverage over the sample
+--' positions with coverage. In `tx` order, as (tx, TIN).
+tinValues ::
+  --' Fewest fragments a transcript needs
+  Int ->
+  AlnQc ->
+  [(Int, Real)]
+
+
+-- Reports
+----------
+
+--' RSeQC geneBody_coverage's `<sample>.geneBodyCoverage.txt`
+geneBodyCoverageText ::
+  --' Sample name
+  Str ->
+  AlnQc ->
+  Str
+
+--' RSeQC tin's `<sample>.summary.txt`
+--'
+--' Mean, median and standard deviation of the TINs of transcripts with at
+--' least 10 fragments.
+tinSummaryText ::
+  --' Sample name
+  Str ->
+  AlnQc ->
+  Str
+
+--' nf-core's `<sample>.biotype_counts_mqc.tsv`
+--'
+--' MultiQC custom content.
+biotypeCountsText :: AlnQcRefs -> AlnQc -> Str
+
+--' nf-core's `<sample>.biotype_counts_rrna_mqc.tsv`
+--'
+--' The percent of biotype-counted fragments on the biotype "rRNA" (MultiQC
+--' general stats).
+rrnaPercentText ::
+  --' Sample name
+  Str ->
+  AlnQcRefs ->
+  AlnQc ->
+  Str
+
+--' A MultiQC custom-content row of read origin percentages
+readOriginText ::
+  --' Sample name
+  Str ->
+  AlnQc ->
+  Str
+
+-- Summaries as monoids, for `<>` and `mempty`.
+
+instance Semigroup AlnQc where
+  (<>) a b = mergeAlnQc a b
